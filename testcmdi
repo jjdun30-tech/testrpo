@@ -1,0 +1,105 @@
+/*
+ * CmdInjectionSingleFile.java
+ *
+ * INTENTIONALLY VULNERABLE sample for static analysis (Command Injection).
+ * Single-file deliverable — no additional files required to compile.
+ *
+ * How to compile (produces class files for CodeQL):
+ *   mkdir -p out
+ *   javac -d out CmdInjectionSingleFile.java
+ *
+ * How to run (DO NOT run with untrusted inputs; only for controlled testing):
+ *   java -cp out CmdInjectionSingleFile "userArg" "/tmp/foo" "echo test"
+ *
+ * Notes for CodeQL scanning:
+ * - CodeQL's Java analysis works best when class files exist. The javac step above creates them.
+ * - If using CodeQL CLI, create a DB using the javac compile command:
+ *     codeql database create db-java --language=java --command "javac -d out CmdInjectionSingleFile.java"
+ *   then run the analysis against that DB.
+ *
+ * WARNING: This program executes shell commands built from its inputs. Do NOT execute
+ * it on production machines or with untrusted data. Use only in isolated test environments.
+ */
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.Map;
+
+public class CmdInjectionSingleFile {
+
+    public static void main(String[] args) {
+        // Simulated "tainted" inputs
+        // In a real app these might come from HTTP params, env vars, user args, etc.
+        String userArg = args.length > 0 ? args[0] : ".*";                // tainted
+        String filename = args.length > 1 ? args[1] : "/tmp/testfile";   // tainted
+        String commandPart = args.length > 2 ? args[2] : "date";         // tainted
+
+        // Also include environment input as taint source
+        String envInput = System.getenv("USER_INPUT"); // may be null
+
+        try {
+            // ----------------------------------------------------------------
+            // VULN #1: Runtime.exec(String) with concatenated tainted input
+            // ----------------------------------------------------------------
+            // Vulnerable: building a command string by concatenating untrusted input
+            String cmd1 = "ls -la " + userArg;
+            // CodeQL should flag: Runtime.exec with tainted String.
+            Process p1 = Runtime.getRuntime().exec(cmd1);
+            printProcessOutput("Runtime.exec concatenation (cmd1)", p1);
+
+            // ----------------------------------------------------------------
+            // VULN #2: Runtime.exec with explicit shell -c and concatenated user input
+            // ----------------------------------------------------------------
+            // Classic shell injection: using "sh -c" with a built command string that contains tainted data.
+            String cmd2 = "sh -c \"cat " + filename + " | grep " + userArg + "\"";
+            // CodeQL should flag shell '-c' usage with tainted data concatenated into the string.
+            Process p2 = Runtime.getRuntime().exec(cmd2);
+            printProcessOutput("Runtime.exec shell -c concatenation (cmd2)", p2);
+
+            // ----------------------------------------------------------------
+            // VULN #3: ProcessBuilder invoked with a single string that contains tainted parts
+            // ----------------------------------------------------------------
+            // Using ProcessBuilder with a single String that represents a shell line is dangerous:
+            // on some platforms it behaves like invoking a shell and is injection-prone.
+            String cmd3 = "sh -c \"echo 'searching'; " + commandPart + " ; echo 'done'\"";
+            ProcessBuilder pb3 = new ProcessBuilder(cmd3); // vulnerable: single-string form with tainted content
+            Map<String, String> env = pb3.environment();
+            // pass along an environment variable that may also be tainted
+            if (envInput != null) {
+                env.put("EXTRA", envInput);
+            }
+            pb3.redirectErrorStream(true);
+            Process p3 = pb3.start();
+            printProcessOutput("ProcessBuilder single-string (cmd3)", p3);
+
+            // ----------------------------------------------------------------
+            // VULN #4: Runtime.exec with array form but using shell and tainted -c argument
+            // ----------------------------------------------------------------
+            // Even array form can be dangerous when invoking a shell and passing a tainted '-c' argument.
+            String shellPayload = commandPart + " ; echo END-" + userArg;
+            String[] cmdArr = { "sh", "-c", shellPayload }; // shellPayload contains tainted data
+            Process p4 = Runtime.getRuntime().exec(cmdArr);
+            printProcessOutput("Runtime.exec array with shell -c (cmdArr)", p4);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Utility helper prints process stdout (keeps the example compact)
+    private static void printProcessOutput(String label, Process process) {
+        System.out.println("=== Output for: " + label + " ===");
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                System.out.println(line);
+            }
+            // Wait for the process to finish to keep behavior deterministic for analysis logs
+            process.waitFor();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        System.out.println("=== End: " + label + " ===");
+    }
+}
