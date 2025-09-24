@@ -1,0 +1,75 @@
+package com.example.vuln;
+
+import java.sql.*;
+
+/**
+ * Intentional vulnerable sample for static analysis testing.
+ *
+ * Contains:
+ *  - VULN #1: SQL injection via concatenation into Statement
+ *  - VULN #2: Unsafe ORDER BY concatenation (tainted identifier)
+ *  - VULN #3: Misuse of PreparedStatement by concatenating tainted data
+ *
+ * Build with Gradle and scan with CodeQL.
+ */
+public class VulnExample {
+
+    public static void main(String[] args) {
+        // Inputs that would be considered "tainted" for static analysis
+        String username = System.getProperty("user.name", "attacker"); // user-controlled
+        String password = System.getenv("TEST_APP_PWD");                // user-controlled
+        String tenant   = args.length > 0 ? args[0] : "";               // user-controlled
+        String sortBy   = args.length > 1 ? args[1] : "id";             // user-controlled
+        String search   = args.length > 2 ? args[2] : "";               // user-controlled
+
+        // NOTE: Using a local DB string here for the sample. In tests, CodeQL should detect the patterns.
+        try (Connection conn = DriverManager.getConnection(
+                "jdbc:mysql://localhost:3306/testdb", "root", "root")) {
+
+            // ----------------------------------------------------------------
+            // VULN #1: classic SQLi via concatenation into Statement
+            // ----------------------------------------------------------------
+            Statement stmt = conn.createStatement();
+            String loginSql =
+                "SELECT id, role FROM users WHERE username='" + username +
+                "' AND password='" + password + "' AND tenant='" + tenant + "'";
+            // <-- Vulnerable: concatenated tainted strings into SQL
+            ResultSet rs = stmt.executeQuery(loginSql);
+            while (rs.next()) {
+                System.out.println("User " + rs.getInt("id") + " role=" + rs.getString("role"));
+            }
+            rs.close();
+
+            // ----------------------------------------------------------------
+            // VULN #2: unsafe ORDER BY concatenation (tainted identifier)
+            // ----------------------------------------------------------------
+            // Many scanners look for ORDER BY built from tainted input without validation.
+            String listSql = "SELECT id, username FROM users ORDER BY " + sortBy;
+            // <-- Vulnerable: tainted identifier used directly in ORDER BY
+            ResultSet rs2 = stmt.executeQuery(listSql);
+            while (rs2.next()) {
+                System.out.println("User: " + rs2.getInt("id") + " " + rs2.getString("username"));
+            }
+            rs2.close();
+
+            // ----------------------------------------------------------------
+            // VULN #3: misuse of PreparedStatement (still concatenates tainted data)
+            // ----------------------------------------------------------------
+            // Here PreparedStatement is used, BUT the query string itself contains concatenated tainted input.
+            PreparedStatement ps = conn.prepareStatement(
+                "SELECT id FROM users WHERE username LIKE '%" + search + "%'");
+            // <-- Vulnerable: search variable is concatenated into SQL string before prepare
+            ResultSet rs3 = ps.executeQuery();
+            while (rs3.next()) {
+                System.out.println("Match: " + rs3.getInt("id"));
+            }
+            rs3.close();
+            ps.close();
+
+            stmt.close();
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+}
