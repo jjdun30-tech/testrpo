@@ -22,8 +22,8 @@ jobs:
         with:
           languages: 'csharp,javascript' # Adjust to your repo's languages
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+- name: Build with dotnet
+  run: dotnet build --configuration Release
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
